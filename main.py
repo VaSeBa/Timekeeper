@@ -6,7 +6,8 @@ from openpyxl.styles import PatternFill, Font
 from openpyxl.utils import get_column_letter
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QFileDialog, QLabel,
-                             QProgressBar, QTextEdit, QMessageBox)
+                             QProgressBar, QTextEdit, QMessageBox, QComboBox,
+                             QSpinBox)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
 
@@ -18,6 +19,8 @@ class ExcelComparator(QMainWindow):
         self.file1_path = None
         self.file2_path = None
         self.current_worker = None
+        self.selected_month = 1
+        self.selected_year = 2023
         self.init_ui()
 
     def init_ui(self):
@@ -27,6 +30,9 @@ class ExcelComparator(QMainWindow):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
+
+        # Панель выбора даты
+        self.init_date_selector(layout)
 
         # Панели выбора файлов
         self.init_file_selectors(layout)
@@ -38,6 +44,28 @@ class ExcelComparator(QMainWindow):
         self.init_progress_log(layout)
         self.statusBar().showMessage('Готово к работе')
 
+    def init_date_selector(self, layout):
+        """Инициализация выбора месяца и года"""
+        date_layout = QHBoxLayout()
+
+        self.month_combo = QComboBox()
+        self.month_combo.addItems([
+            'Январь', 'Февраль', 'Март', 'Апрель',
+            'Май', 'Июнь', 'Июль', 'Август',
+            'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'
+        ])
+        self.month_combo.setCurrentIndex(0)
+
+        self.year_spin = QSpinBox()
+        self.year_spin.setRange(2000, 2100)
+        self.year_spin.setValue(2023)
+
+        date_layout.addWidget(QLabel("Месяц табеля:"))
+        date_layout.addWidget(self.month_combo)
+        date_layout.addWidget(QLabel("Год:"))
+        date_layout.addWidget(self.year_spin)
+        layout.addLayout(date_layout)
+
     def init_file_selectors(self, layout):
         """Инициализация компонентов выбора файлов"""
         file1_layout = QHBoxLayout()
@@ -46,23 +74,31 @@ class ExcelComparator(QMainWindow):
         self.label_file1 = QLabel("Файл не выбран", self)
         file1_layout.addWidget(self.btn_file1)
         file1_layout.addWidget(self.label_file1)
+
         file2_layout = QHBoxLayout()
         self.btn_file2 = QPushButton("Выбрать файл для сравнения", self)
         self.btn_file2.clicked.connect(lambda: self.select_file(2))
         self.label_file2 = QLabel("Файл не выбран", self)
         file2_layout.addWidget(self.btn_file2)
         file2_layout.addWidget(self.label_file2)
+
         layout.addLayout(file1_layout)
         layout.addLayout(file2_layout)
 
     def init_controls(self, layout):
         """Инициализация элементов управления"""
         control_layout = QHBoxLayout()
+        self.btn_about = QPushButton("Информация", self)
+        self.btn_about.clicked.connect(self.show_about_dialog)
+
         self.btn_compare = QPushButton("Сравнить файлы", self)
         self.btn_compare.clicked.connect(self.start_comparison)
+
         self.btn_abort = QPushButton("Прервать", self)
         self.btn_abort.clicked.connect(self.abort_processing)
         self.btn_abort.setEnabled(False)
+
+        control_layout.addWidget(self.btn_about)
         control_layout.addWidget(self.btn_compare)
         control_layout.addWidget(self.btn_abort)
         layout.addLayout(control_layout)
@@ -75,6 +111,18 @@ class ExcelComparator(QMainWindow):
         self.log = QTextEdit()
         self.log.setReadOnly(True)
         layout.addWidget(self.log)
+
+    def show_about_dialog(self):
+        """Показ информации о приложении"""
+        about_text = """<b>Сравнение табелей учета рабочего времени</b><br><br>
+        Версия 1.1<br>
+        Автор: Ваше имя<br><br>
+        Функционал:<br>
+        - Сравнение двух Excel-файлов табелей<br>
+        - Выделение различий цветом<br>
+        - Генерация отчетов с различными категориями расхождений<br>
+        - Указание периода табелирования"""
+        QMessageBox.information(self, "О программе", about_text)
 
     def select_file(self, file_num):
         """Выбор файла через диалоговое окно"""
@@ -100,6 +148,9 @@ class ExcelComparator(QMainWindow):
 
     def start_comparison(self):
         """Запуск процесса сравнения"""
+        self.selected_month = self.month_combo.currentIndex() + 1
+        self.selected_year = self.year_spin.value()
+
         if not all([self.file1_path, self.file2_path]):
             QMessageBox.warning(self, "Ошибка", "Необходимо выбрать оба файла!")
             return
@@ -110,7 +161,9 @@ class ExcelComparator(QMainWindow):
 
         self.current_worker = CompareWorker(
             self.file1_path,
-            self.file2_path
+            self.file2_path,
+            self.selected_month,
+            self.selected_year
         )
 
         self.current_worker.progress_updated.connect(self.update_progress)
@@ -164,10 +217,12 @@ class CompareWorker(QThread):
     finished = pyqtSignal(str)
     error_occurred = pyqtSignal(str)
 
-    def __init__(self, file1_path, file2_path):
+    def __init__(self, file1_path, file2_path, month, year):
         super().__init__()
         self.file1_path = file1_path
         self.file2_path = file2_path
+        self.month = month
+        self.year = year
         self._is_running = True
 
     def run(self):
@@ -223,16 +278,10 @@ class CompareWorker(QThread):
             how='outer',
             indicator=True)
 
-        # Обработка отсутствующих записей
-        missing_in_base = merged[merged['_merge'] == 'right_only']
-        missing_in_compare = merged[merged['_merge'] == 'left_only']
-        if not missing_in_base.empty:
-            self.message_received.emit(
-                f"Найдено {len(missing_in_base)} записей отсутствующих в базовом файле")
+        # Сохраняем отсутствующие записи для отчета
+        self.missing_in_base = merged[merged['_merge'] == 'right_only'][['id', 'ФИО_compare']]
+        self.missing_in_compare = merged[merged['_merge'] == 'left_only'][['id', 'ФИО_base']]
 
-        if not missing_in_compare.empty:
-            self.message_received.emit(
-                f"Найдено {len(missing_in_compare)} записей отсутствующих в файле сравнения")
         return merged[merged['_merge'] == 'both']
 
     def process_differences(self, merged_df):
@@ -254,10 +303,16 @@ class CompareWorker(QThread):
                 base_val = str(row[f'{day}_base']).strip()
                 compare_val = str(row[f'{day}_compare']).strip()
                 if base_val != compare_val:
+                    # Формирование даты
+                    try:
+                        date_str = f"{int(day):02d}.{self.month:02d}.{self.year}"
+                    except:
+                        date_str = day
+
                     entry = [
                         row['id'],
                         row['ФИО_base'],
-                        day,
+                        date_str,
                         base_val,
                         compare_val
                     ]
@@ -279,7 +334,16 @@ class CompareWorker(QThread):
             # Обновление прогресса
             progress = int(20 + 70 * (idx + 1) / total_rows)
             self.progress_updated.emit(progress)
-        return {'vv': vv_diff, 'dp': dp_diff, 'other': other_diff}, highlight_info
+
+        # Собираем данные об отсутствующих ID
+        missing_data = []
+        for _, row in self.missing_in_base.iterrows():
+            missing_data.append([row['id'], row['ФИО_compare'], "Отсутствует в БАЗОВОМ файле"])
+
+        for _, row in self.missing_in_compare.iterrows():
+            missing_data.append([row['id'], row['ФИО_base'], "Отсутствует в ФАЙЛЕ СРАВНЕНИЯ"])
+
+        return {'vv': vv_diff, 'dp': dp_diff, 'other': other_diff, 'missing': missing_data}, highlight_info
 
     def generate_report(self, report_data, highlight_info):
         """Генерация итогового отчета"""
@@ -294,7 +358,6 @@ class CompareWorker(QThread):
 
     def highlight_differences(self, file_path, cells):
         """Подсветка различий в исходном файле"""
-
         if not cells:
             return
         wb = load_workbook(file_path)
@@ -311,7 +374,7 @@ class CompareWorker(QThread):
         wb.close()
 
     def create_report_file(self, report_data):
-        """Создание файла с тремя листами отчетов"""
+        """Создание файла с четырьмя листами отчетов"""
         output_dir = os.path.dirname(self.file1_path)
         base_name = os.path.splitext(os.path.basename(self.file1_path))[0]
         output_name = f"Сравнение_{base_name}.xlsx"
@@ -319,7 +382,7 @@ class CompareWorker(QThread):
         wb = load_workbook(self.file1_path)
 
         # Удаляем старые версии отчетов
-        for sheet in ['ВВ', 'ДП', 'Остальные']:
+        for sheet in ['ВВ', 'ДП', 'Остальные', 'Отсутствующие']:
             if sheet in wb.sheetnames:
                 del wb[sheet]
 
@@ -327,19 +390,27 @@ class CompareWorker(QThread):
         sheets_config = {
             'ВВ': {
                 'data': report_data['vv'],
-                'color': 'FF0000',  # Красный
-                'header': 'Различия с отметками ВВ'
+                'color': 'FF0000',
+                'header': f'Различия с отметками ВВ ({self.month:02d}.{self.year})',
+                'columns': ['ID', 'ФИО', 'Дата', 'Базовый файл', 'Файл сравнения']
             },
             'ДП': {
                 'data': report_data['dp'],
-                'color': '0000FF',  # Синий
-                'header': 'Различия с отметками ДП'
+                'color': '0000FF',
+                'header': f'Различия с отметками ДП ({self.month:02d}.{self.year})',
+                'columns': ['ID', 'ФИО', 'Дата', 'Базовый файл', 'Файл сравнения']
             },
-
             'Остальные': {
                 'data': report_data['other'],
-                'color': '008000',  # Зеленый
-                'header': 'Прочие различия'
+                'color': '008000',
+                'header': f'Прочие различия ({self.month:02d}.{self.year})',
+                'columns': ['ID', 'ФИО', 'Дата', 'Базовый файл', 'Файл сравнения']
+            },
+            'Отсутствующие': {
+                'data': report_data['missing'],
+                'color': 'FFA500',
+                'header': 'Отсутствующие сотрудники',
+                'columns': ['ID', 'ФИО', 'Статус']
             }
         }
 
@@ -347,8 +418,7 @@ class CompareWorker(QThread):
             ws = wb.create_sheet(sheet_name)
 
             # Заголовки
-            headers = ['ID', 'ФИО', 'День', 'Базовый файл', 'Файл сравнения']
-            ws.append(headers)
+            ws.append(config['columns'])
 
             # Стиль заголовков
             header_font = Font(bold=True, color=config['color'])
